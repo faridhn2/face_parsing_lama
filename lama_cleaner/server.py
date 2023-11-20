@@ -73,68 +73,81 @@ import numpy as np
 # import face_recognition
 import cv2
 import numpy as np
-# def hair_detect(img):
-#   BG_COLOR = (0, 0, 0) # gray
-#   MASK_COLOR = (255, 255, 255) # white
 
-
-#   # Create the options that will be used for ImageSegmenter
-#   base_options = python.BaseOptions(model_asset_path='lama-cleaner/hair_segmenter.tflite')
-#   options = vision.ImageSegmenterOptions(base_options=base_options,
-#                                         output_category_mask=True)
-
-#   # Create the image segmenter
-#   with vision.ImageSegmenter.create_from_options(options) as segmenter:
-
-#     # Loop through demo image(s)
-  
-
-#     # Retrieve the masks for the segmented image
-#     new_img =  mp.Image(image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(img,cv2.COLOR_BGR2RGB))
-#     segmentation_result = segmenter.segment(new_img)
-    
-#     category_mask = segmentation_result.category_mask
-
-#     # Generate solid color images for showing the output segmentation mask.
-#     image_data = new_img.numpy_view()
-#     fg_image = np.zeros(image_data.shape, dtype=np.uint8)
-#     fg_image[:] = MASK_COLOR
-#     bg_image = np.zeros(image_data.shape, dtype=np.uint8)
-#     bg_image[:] = BG_COLOR
-
-#     condition = np.stack((category_mask.numpy_view(),) * 3, axis=-1) > 0.2
-#     output_image = np.where(condition, fg_image, bg_image)
-    
-#     kernel = np.ones((5, 5), np.uint8) 
-  
-
-#     output_image = cv2.dilate(output_image, kernel, iterations=2) 
-#     return output_image
-
-# def create_mask_face(frame):
-  
-#     face_locations = []
-#     rgb_small_frame = frame[:, :, ::-1]
-
-#     face_locations = face_recognition.face_locations(rgb_small_frame)
-
-#     mask = np.zeros((frame.shape[0],frame.shape[1]),dtype=np.uint8)
-#     for (top, right, bottom, left) in face_locations:
-#         top =max(0,top-int(frame.shape[0]/10))
-#         bottom =min(frame.shape[1],bottom+int(frame.shape[1]/10))
-#         left =max(0,left-int(frame.shape[1]/10))
-#         right =min(frame.shape[0],right+int(frame.shape[0]/10))
-
-#         mask[top:bottom,left:right]=255
-    
-#     hair_mask = hair_detect(frame)
-#     hair_mask = cv2.cvtColor(hair_mask,cv2.COLOR_BGR2GRAY)
-#     print('--------')
-#     print(hair_mask.shape)
-#     print(mask.shape)
-#     mask=cv2.add(hair_mask,mask)
-#     return mask
 import cv2
+from typing import List
+import os
+HOME = os.path.join(os.getcwd(),'face_parsing_lama')
+print("HOME:", HOME)
+SOURCE_IMAGE_PATH = f"{HOME}/Grounded-Segment-Anything/1.png"
+CLASSES = ['face','neck','glasses','hat','hair','beard','earrings','ears']
+# CLASSES = ['arms']
+BOX_TRESHOLD = 0.35
+TEXT_TRESHOLD = 0.25
+def enhance_class_name(class_names: List[str]) -> List[str]:
+    return [
+        f"all {class_name}s"
+        for class_name
+        in class_names
+    ]
+
+import os
+
+GROUNDING_DINO_CONFIG_PATH =  "/content/face_parsing_lama/GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py"
+print(GROUNDING_DINO_CONFIG_PATH, "; exist:", os.path.isfile(GROUNDING_DINO_CONFIG_PATH))
+
+import os
+
+GROUNDING_DINO_CHECKPOINT_PATH = "/content/face_parsing_lama/weights/groundingdino_swint_ogc.pth"
+print(GROUNDING_DINO_CHECKPOINT_PATH, "; exist:", os.path.isfile(GROUNDING_DINO_CHECKPOINT_PATH))
+import os
+
+SAM_CHECKPOINT_PATH = "/content/face_parsing_lama/weights/sam_vit_h_4b8939.pth"
+print(SAM_CHECKPOINT_PATH, "; exist:", os.path.isfile(SAM_CHECKPOINT_PATH))
+import torch
+
+DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+
+from GroundingDINO.groundingdino.util.inference import Model
+
+grounding_dino_model = Model(model_config_path=GROUNDING_DINO_CONFIG_PATH, model_checkpoint_path=GROUNDING_DINO_CHECKPOINT_PATH)
+SAM_ENCODER_VERSION = "vit_h"
+import sys
+from segment_anything import sam_model_registry, SamPredictor
+
+sam = sam_model_registry[SAM_ENCODER_VERSION](checkpoint=SAM_CHECKPOINT_PATH).to(device=DEVICE)
+sam_predictor = SamPredictor(sam)
+import torchvision.transforms as transforms
+sys.path.append('/content/face_parsing_lama/Grounded-Segment-Anything/face_parsing_PyTorch/')
+# %cd face_parsing_PyTorch
+from model import BiSeNet
+# %cd ..
+n_classes = 19
+net = BiSeNet(n_classes=n_classes)
+device = torch.device('cuda:0')
+net.to(device)
+ckpt_path = '/content/face_parsing_lama/Grounded-Segment-Anything/79999_iter.pth'
+net.load_state_dict(torch.load(ckpt_path))
+net.eval()
+
+to_tensor = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
+    ])
+model_type = "vit_t"
+sam_checkpoint = "/content/face_parsing_lama/Grounded-Segment-Anything/MobileSAM/weights/mobile_sam.pt"
+sys.path.append('/content/face_parsing_lama/Grounded-Segment-Anything/')
+
+sys.path.append('/content/face_parsing_lama/Grounded-Segment-Anything/MobileSAM/')
+from mobile_sam import sam_model_registry, SamAutomaticMaskGenerator, SamPredictor
+mobile_sam = sam_model_registry[model_type](checkpoint=sam_checkpoint)
+# mobile_sam.to(device=device)
+mobile_sam.eval()
+# image = cv2.imread(ima.png)
+predictor = SamPredictor(mobile_sam)
+import supervision as sv
+
 
 def get_output_layers(net):
 
@@ -143,84 +156,76 @@ def get_output_layers(net):
     output_layers = [layer_names[i - 1] for i in net.getUnconnectedOutLayers()]
 
     return output_layers
+import cv2
+
+
+import numpy as np
+from segment_anything import SamPredictor
+
+
+def segment(sam_predictor: SamPredictor, image: np.ndarray, xyxy: np.ndarray) -> np.ndarray:
+    sam_predictor.set_image(image)
+    result_masks = []
+    for box in xyxy:
+        masks, scores, logits = sam_predictor.predict(
+            box=box,
+            multimask_output=True
+        )
+        index = np.argmax(scores)
+        result_masks.append(masks[index])
+    return np.array(result_masks)
+
+
+import numpy as np
+from segment_anything import SamPredictor
+
+
 def create_mask_person(image):
+  
+# detect objects
+  detections = grounding_dino_model.predict_with_classes(
+      image=image,
+      classes=enhance_class_name(class_names=CLASSES),
+      box_threshold=BOX_TRESHOLD,
+      text_threshold=TEXT_TRESHOLD
+  )
+
+  # annotate image with detections
+  box_annotator = sv.BoxAnnotator()
+  labels = [
+      f"{CLASSES[class_id]} {confidence:0.2f}"
+      for _, _, confidence, class_id, _
+      in detections]
+  annotated_frame = box_annotator.annotate(scene=image.copy(), detections=detections, labels=labels)
+  detections.mask = segment(
+    sam_predictor=sam_predictor,
+    image=cv2.cvtColor(image, cv2.COLOR_BGR2RGB),
+    xyxy=detections.xyxy
+  )
+
+  # annotate image with detections
+  box_annotator = sv.BoxAnnotator()
+  mask_annotator = sv.MaskAnnotator()
+  labels = [
+      f"{CLASSES[class_id]} {confidence:0.2f}"
+      for _, _, confidence, class_id, _
+      in detections]
+  annotated_image = mask_annotator.annotate(scene=image.copy(), detections=detections)
+  annotated_image1 = box_annotator.annotate(scene=annotated_image, detections=detections, labels=labels)
+  base_mask = np.zeros((image.shape[0],image.shape[1]),dtype=np.uint8)
+  print((detections.mask[0].shape))
+  print((base_mask.shape))
+  
+  try:
+    for mask_image in detections.mask:
+      
+      base_mask = cv2.bitwise_or(np.array(mask_image*255,dtype=np.uint8), base_mask)
+
 
     
-    
-    
-    big_rate_h = 10
-    big_rate_w = 2
-    Width = image.shape[1]
-    Height = image.shape[0]
-    scale = 0.00392
-
-    # read class names from text file
-    classes = None
-    with open('object-detection-opencv/yolov3.txt', 'r') as f:
-        classes = [line.strip() for line in f.readlines()]
-
-    # generate different colors for different classes 
-    COLORS = np.random.uniform(0, 255, size=(len(classes), 3))
-
-    # read pre-trained model and config file
-    net = cv2.dnn.readNet('yolov3.weights', 'object-detection-opencv/yolov3.cfg')
-
-    # create input blob 
-    blob = cv2.dnn.blobFromImage(image, scale, (416,416), (0,0,0), True, crop=False)
-
-    # set input blob for the network
-    net.setInput(blob)
-    
-    mask = np.zeros((image.shape[0],image.shape[1]),dtype=np.uint8)
-    
-    class_ids = []
-    confidences = []
-    boxes = []
-    conf_threshold = 0.5
-    nms_threshold = 0.4
-
-    # for each detetion from each output layer 
-    # get the confidence, class id, bounding box params
-    # and ignore weak detections (confidence < 0.5)
-    outs = net.forward(get_output_layers(net))
-
-    for out in outs:
-        for detection in out:
-            scores = detection[5:]
-            class_id = np.argmax(scores)
-            confidence = scores[class_id]
-            if confidence > 0.5:
-                center_x = int(detection[0] * Width)
-                center_y = int(detection[1] * Height)
-                w = int(detection[2] * Width)
-                h = int(detection[3] * Height)
-                x = center_x - w / 2
-                y = center_y - h / 2
-                class_ids.append(class_id)
-                confidences.append(float(confidence))
-                boxes.append([x, y, w, h])
-    
-    
-    indices = cv2.dnn.NMSBoxes(boxes, confidences, conf_threshold, nms_threshold)
-    for i in indices:
-        if class_ids[i] == 0:
-          box = boxes[i]
-          w = int(box[2]*(1+1/big_rate_w))
-          h = int(box[3]*(1+1/big_rate_w))
-          x = int(max(0,box[0]-w/(big_rate_w*2)))
-          y = int(max(0,box[1]-h/(big_rate_h*2)))
-          
-          print(classes[class_ids[i]])
-          gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) # convert to grayscale
-          blur = cv2.blur(gray, (5, 5)) # blur the image
-          thresh =  np.zeros((image.shape[0],image.shape[1]),dtype=np.uint8)
-          print(1+1/big_rate_w)
-          ret, thresh[y:(min(Height,int(y+h*(1+(1/big_rate_h))))),x:(int(x+w))] = cv2.threshold(
-              blur[y:(min(Height,int(y+h*(1+(1/big_rate_h))))),x:(int(x+w))], 
-              220, 255, cv2.THRESH_BINARY_INV)
-          # thresh[y:(min(Height,int(y+h*1.1))),x:min(Width,(int(x+w*1.1)))]=0
-          thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (5,5)), iterations=5)
-    return thresh
+  except:
+    print('no more masks')
+  return base_mask
 
 NUM_THREADS = str(multiprocessing.cpu_count())
 
